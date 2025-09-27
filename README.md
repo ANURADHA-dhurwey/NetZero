@@ -1,0 +1,230 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+/**
+ * @title NetZero
+ * @dev A smart contract for managing carbon credits and environmental impact tracking
+ * @author NetZero Team
+ */
+contract NetZero {
+    
+    // State variables
+    address public owner;
+    uint256 public totalCarbonCredits;
+    uint256 public totalCarbonOffset;
+    
+    // Structs
+    struct CarbonCredit {
+        uint256 id;
+        address issuer;
+        uint256 amount; // in tons of CO2
+        string projectName;
+        bool isVerified;
+        bool isRetired;
+        uint256 timestamp;
+    }
+    
+    struct User {
+        uint256 creditBalance;
+        uint256 totalOffset;
+        bool isVerified;
+        string organization;
+    }
+    
+    // Mappings
+    mapping(uint256 => CarbonCredit) public carbonCredits;
+    mapping(address => User) public users;
+    mapping(address => bool) public authorizedVerifiers;
+    
+    // Events
+    event CreditIssued(uint256 indexed creditId, address indexed issuer, uint256 amount, string projectName);
+    event CreditTransferred(address indexed from, address indexed to, uint256 amount);
+    event CreditRetired(uint256 indexed creditId, address indexed retiree, uint256 amount);
+    event UserVerified(address indexed user, string organization);
+    
+    // Modifiers
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can perform this action");
+        _;
+    }
+    
+    modifier onlyVerifier() {
+        require(authorizedVerifiers[msg.sender] || msg.sender == owner, "Only authorized verifiers can perform this action");
+        _;
+    }
+    
+    modifier validCredit(uint256 _creditId) {
+        require(carbonCredits[_creditId].id != 0, "Credit does not exist");
+        require(!carbonCredits[_creditId].isRetired, "Credit has been retired");
+        _;
+    }
+    
+    // Constructor
+    constructor() {
+        owner = msg.sender;
+        authorizedVerifiers[msg.sender] = true;
+        totalCarbonCredits = 0;
+        totalCarbonOffset = 0;
+    }
+    
+    /**
+     * @dev Core Function 1: Issue new carbon credits
+     * @param _amount Amount of carbon credits in tons of CO2
+     * @param _projectName Name of the environmental project
+     * @return creditId The ID of the newly issued credit
+     */
+    function issueCarbonCredit(
+        uint256 _amount, 
+        string memory _projectName
+    ) external returns (uint256 creditId) {
+        require(_amount > 0, "Amount must be greater than zero");
+        require(bytes(_projectName).length > 0, "Project name cannot be empty");
+        
+        creditId = totalCarbonCredits + 1;
+        
+        carbonCredits[creditId] = CarbonCredit({
+            id: creditId,
+            issuer: msg.sender,
+            amount: _amount,
+            projectName: _projectName,
+            isVerified: false,
+            isRetired: false,
+            timestamp: block.timestamp
+        });
+        
+        users[msg.sender].creditBalance += _amount;
+        totalCarbonCredits++;
+        
+        emit CreditIssued(creditId, msg.sender, _amount, _projectName);
+        
+        return creditId;
+    }
+    
+    /**
+     * @dev Core Function 2: Transfer carbon credits between users
+     * @param _to Address of the recipient
+     * @param _amount Amount of credits to transfer
+     */
+    function transferCredits(address _to, uint256 _amount) external {
+        require(_to != address(0), "Cannot transfer to zero address");
+        require(_amount > 0, "Amount must be greater than zero");
+        require(users[msg.sender].creditBalance >= _amount, "Insufficient credit balance");
+        require(_to != msg.sender, "Cannot transfer to yourself");
+        
+        users[msg.sender].creditBalance -= _amount;
+        users[_to].creditBalance += _amount;
+        
+        emit CreditTransferred(msg.sender, _to, _amount);
+    }
+    
+    /**
+     * @dev Core Function 3: Retire carbon credits to offset carbon footprint
+     * @param _creditId ID of the credit to retire
+     * @param _amount Amount of credits to retire
+     */
+    function retireCarbonCredit(uint256 _creditId, uint256 _amount) external validCredit(_creditId) {
+        require(_amount > 0, "Amount must be greater than zero");
+        require(carbonCredits[_creditId].amount >= _amount, "Insufficient credit amount");
+        require(users[msg.sender].creditBalance >= _amount, "Insufficient user balance");
+        
+        // Update credit
+        carbonCredits[_creditId].amount -= _amount;
+        if (carbonCredits[_creditId].amount == 0) {
+            carbonCredits[_creditId].isRetired = true;
+        }
+        
+        // Update user balances
+        users[msg.sender].creditBalance -= _amount;
+        users[msg.sender].totalOffset += _amount;
+        
+        // Update global offset
+        totalCarbonOffset += _amount;
+        
+        emit CreditRetired(_creditId, msg.sender, _amount);
+    }
+    
+    /**
+     * @dev Verify a carbon credit (only authorized verifiers)
+     * @param _creditId ID of the credit to verify
+     */
+    function verifyCarbonCredit(uint256 _creditId) external onlyVerifier validCredit(_creditId) {
+        carbonCredits[_creditId].isVerified = true;
+    }
+    
+    /**
+     * @dev Verify a user/organization (only authorized verifiers)
+     * @param _user Address of the user to verify
+     * @param _organization Name of the organization
+     */
+    function verifyUser(address _user, string memory _organization) external onlyVerifier {
+        require(_user != address(0), "Invalid user address");
+        require(bytes(_organization).length > 0, "Organization name cannot be empty");
+        
+        users[_user].isVerified = true;
+        users[_user].organization = _organization;
+        
+        emit UserVerified(_user, _organization);
+    }
+    
+    /**
+     * @dev Add authorized verifier (only owner)
+     * @param _verifier Address of the new verifier
+     */
+    function addVerifier(address _verifier) external onlyOwner {
+        require(_verifier != address(0), "Invalid verifier address");
+        authorizedVerifiers[_verifier] = true;
+    }
+    
+    /**
+     * @dev Remove authorized verifier (only owner)
+     * @param _verifier Address of the verifier to remove
+     */
+    function removeVerifier(address _verifier) external onlyOwner {
+        require(_verifier != owner, "Cannot remove owner as verifier");
+        authorizedVerifiers[_verifier] = false;
+    }
+    
+    /**
+     * @dev Get user's carbon credit balance
+     * @param _user Address of the user
+     * @return balance The user's credit balance
+     */
+    function getUserBalance(address _user) external view returns (uint256 balance) {
+        return users[_user].creditBalance;
+    }
+    
+    /**
+     * @dev Get user's total carbon offset
+     * @param _user Address of the user
+     * @return offset The user's total offset amount
+     */
+    function getUserOffset(address _user) external view returns (uint256 offset) {
+        return users[_user].totalOffset;
+    }
+    
+    /**
+     * @dev Get carbon credit details
+     * @param _creditId ID of the credit
+     * @return credit The carbon credit struct
+     */
+    function getCreditDetails(uint256 _creditId) external view returns (CarbonCredit memory credit) {
+        require(carbonCredits[_creditId].id != 0, "Credit does not exist");
+        return carbonCredits[_creditId];
+    }
+    
+    /**
+     * @dev Get contract statistics
+     * @return totalCredits Total number of credits issued
+     * @return totalOffset Total amount of carbon offset
+     */
+    function getContractStats() external view returns (uint256 totalCredits, uint256 totalOffset) {
+        return (totalCarbonCredits, totalCarbonOffset);
+    }
+}
+
+
+
+contract address - 0xd9145CCE52D386f254917e481eB44e9943F39138
+
+
+<img width="1348" height="722" alt="Screenshot 2025-09-27 150507" src="https://github.com/user-attachments/assets/1e418349-35f5-4a01-8ade-0035d308b25f" />
